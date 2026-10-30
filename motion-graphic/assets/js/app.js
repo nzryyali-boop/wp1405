@@ -680,6 +680,7 @@
   }
 
   window.__mg = {
+    audios: () => audios,
     go: (n) => playScene(Math.max(0, Math.min(SCENE_DATA.length - 1, n))),
     revealAll: (n) => [...Array(SCENE_DATA[n].beats.length).keys()].forEach((k) => revealBeat(n, k)),
     pause: () => pauseAll(),
