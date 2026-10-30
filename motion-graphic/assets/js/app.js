@@ -83,6 +83,8 @@
   let hideTimer = null;
   let totalDuration = 0;
   let finished = false;
+  const RENDER = new URLSearchParams(location.search).get('render') === '1';
+  let metaReady = [];
 
   const CHARS_PER_SEC = 13.2;
 
@@ -225,6 +227,16 @@
     updateTime();
   }
 
+  function waitMeta() {
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const done = SCENE_DATA.every((sc, i) => !sc.audio || metaReady[i]);
+        if (done || Date.now() - t0 > 8000) { clearInterval(iv); resolve(); }
+      }, 80);
+    });
+  }
+
   function updateHint() {
     const el = document.querySelector('.veil-hint');
     if (!el || !totalDuration) return;
@@ -234,6 +246,7 @@
 
   function seedParticles(n = 16) {
     if (!particlesEl) return;
+    particleSpecs = [];
     let html = '';
     for (let i = 0; i < n; i++) {
       const left = Math.round(Math.random() * 100);
@@ -242,9 +255,145 @@
       const delay = (Math.random() * 18).toFixed(1);
       const dx = Math.round((Math.random() * 2 - 1) * 46);
       const size = (2 + Math.random() * 2.4).toFixed(1);
+      particleSpecs.push({ dx: dx / 26, v: (1 / parseFloat(dur)) * 1.4, phase: parseFloat(delay) / parseFloat(dur) });
       html += `<i style="left:${left}%;bottom:${bottom}%;width:${size}px;height:${size}px;--dx:${dx}px;animation-duration:${dur}s;animation-delay:-${delay}s"></i>`;
     }
     particlesEl.innerHTML = html;
+  }
+
+  /* ---------------- render engine (deterministic frames) ---------------- */
+  const easeOut = (p) => 1 - Math.pow(1 - p, 4);
+  const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+  let sceneStarts = [];
+  let renderItems = [];
+  let particleSpecs = [];
+
+  function buildRenderModel() {
+    sceneStarts = [];
+    let acc = 0;
+    SCENE_DATA.forEach((sc, i) => { sceneStarts[i] = acc; acc += durations[i] || 0; });
+    totalDuration = acc;
+
+    renderItems = scenes.map((el) => {
+      const items = [];
+      const kick = el.querySelector('.kicker');
+      if (kick) items.push({ el: kick, type: 'kicker', beat: 0, td: 0 });
+
+      el.querySelectorAll('.title .wi').forEach((w, k) => {
+        items.push({ el: w, type: 'word', k });
+      });
+
+      el.querySelectorAll('.b').forEach((node) => {
+        const beat = +node.dataset.beat || 0;
+        items.push({ el: node, type: 'block', beat, td: 0 });
+        node.querySelectorAll('.rung,.chip,.person').forEach((kid) => {
+          const td = parseFloat((kid.style.getPropertyValue('--td') || '0').replace('ms', '')) || 0;
+          const t = kid.classList.contains('rung') ? 'rung' : kid.classList.contains('chip') ? 'chip' : 'person';
+          items.push({ el: kid, type: t, beat, td });
+        });
+        node.querySelectorAll('.checklist li').forEach((li) => {
+          const tick = li.querySelector('.tick');
+          if (!tick) return;
+          const td = parseFloat((li.style.getPropertyValue('--td') || '0').replace('ms', '')) || 0;
+          items.push({ el: tick, type: 'tick', beat, td });
+        });
+      });
+      return items;
+    });
+  }
+
+  function sceneIndexAt(T) {
+    let i = 0;
+    for (let k = 0; k < durations.length; k++) {
+      if (T >= sceneStarts[k] - 0.0001) i = k;
+    }
+    return i;
+  }
+
+  function applyRender(T) {
+    const ANTICIPATE = 0.9;
+    const active = sceneIndexAt(T);
+
+    SCENE_DATA.forEach((sc, k) => {
+      const S = sceneStarts[k], E = S + (durations[k] || 0);
+      const el = scenes[k];
+
+      const inP = clamp01((T - S) / 0.75);
+      const outP = 1 - clamp01((T - E) / 0.6);
+      const visible = (T > S - 0.7) && (T < E + 0.65);
+      el.style.display = visible ? '' : 'none';
+      el.style.opacity = String(Math.min(inP, outP));
+      el.style.transform = 'translateY(' + (((1 - inP) * 26) - ((1 - outP) * 22)).toFixed(2) + 'px)';
+
+      const bt = beatTimes[k] || [];
+      const local = T - S;
+
+      renderItems[k].forEach((it) => {
+        const e = it.el;
+        if (it.type === 'kicker') {
+          const p = easeOut(clamp01((local - 0.05) / 0.7));
+          e.style.opacity = String(p);
+          e.style.transform = 'translateY(' + ((1 - p) * 10).toFixed(2) + 'px)';
+          return;
+        }
+        if (it.type === 'word') {
+          const p = easeOut(clamp01((local - (0.12 + it.k * 0.078)) / 1.0));
+          e.style.opacity = String(clamp01(p * 1.6));
+          e.style.transform = 'translateY(' + ((1 - p) * 115).toFixed(2) + '%)';
+          return;
+        }
+        const bStart = it.beat === 0 ? 0.12 : (bt[it.beat] !== undefined ? bt[it.beat] - ANTICIPATE : 1e9);
+        const start = bStart + (it.td || 0) / 1000;
+        if (it.type === 'block') {
+          const p = easeOut(clamp01((local - start) / 0.9));
+          e.style.opacity = String(p);
+          e.style.transform = 'translateY(' + ((1 - p) * 30).toFixed(2) + 'px)';
+          e.style.filter = p < 0.995 ? 'blur(' + ((1 - p) * 7).toFixed(2) + 'px)' : 'none';
+        } else if (it.type === 'rung') {
+          const p = easeOut(clamp01((local - start) / 0.85));
+          e.style.opacity = String(p);
+          e.style.transform = 'translateX(' + ((1 - p) * 26).toFixed(2) + 'px)';
+        } else if (it.type === 'chip') {
+          const p = easeOut(clamp01((local - start) / 0.8));
+          e.style.opacity = String(p);
+          e.style.transform = 'translateY(' + ((1 - p) * 16).toFixed(2) + 'px) scale(' + (0.96 + p * 0.04).toFixed(3) + ')';
+        } else if (it.type === 'person') {
+          const p = easeOut(clamp01((local - start) / 0.85));
+          e.style.opacity = String(p);
+          e.style.transform = 'translateY(' + ((1 - p) * 26).toFixed(2) + 'px) scale(' + (0.96 + p * 0.04).toFixed(3) + ')';
+        } else if (it.type === 'tick') {
+          const p = clamp01((local - start) / 0.55);
+          const pe = 1 - Math.pow(1 - p, 3);
+          e.style.opacity = String(p);
+          e.style.transform = 'scale(' + (0.4 + pe * 0.6).toFixed(3) + ')';
+        }
+      });
+    });
+
+    const sc = SCENE_DATA[active];
+    const bt = beatTimes[active] || [];
+    let beatIdx = 0;
+    for (let k = 0; k < bt.length; k++) if (T - sceneStarts[active] >= bt[k] - 0.02) beatIdx = k;
+    const cap = (sc.beats && sc.beats[beatIdx]) ? sc.beats[beatIdx].caption : '';
+    const capStart = sceneStarts[active] + (bt[beatIdx] || 0);
+    if (captionEl.textContent !== cap) captionEl.textContent = cap;
+    captionEl.style.opacity = String(clamp01((T - capStart) / 0.22) * 0.9 + 0.1);
+
+    idx = active;
+    virtualT = T - sceneStarts[active];
+    updateCounterAndBar();
+
+    if (particlesEl && particleSpecs.length) {
+      const dots = particlesEl.children;
+      for (let i = 0; i < dots.length && i < particleSpecs.length; i++) {
+        const sp = particleSpecs[i];
+        const ph = (T * sp.v + sp.phase) % 1;
+        const y = -(ph * 340);
+        const op = Math.sin(Math.PI * ph) * 0.8;
+        dots[i].style.transform = 'translate3d(' + (sp.dx * ph).toFixed(1) + 'px,' + y.toFixed(1) + 'px,0)';
+        dots[i].style.opacity = op.toFixed(2);
+      }
+    }
   }
 
   /* ---------------- audio ---------------- */
@@ -263,6 +412,7 @@
       a.src = s.audio;
       a.addEventListener('loadedmetadata', () => {
         if (isFinite(a.duration) && a.duration > 0.4) {
+          metaReady[i] = true;
           durations[i] = a.duration;
           computeBeatTimes(i);
           refreshTotal();
@@ -345,14 +495,14 @@
     clearReveals(i);
 
     const a = audios[i];
-    if (a && !opts.silent) {
+    if (a && !opts.silent && !RENDER) {
       try { a.currentTime = 0; } catch (e) {}
       a.muted = muted;
       const pr = a.play();
       if (pr && pr.catch) pr.catch(() => { playing = false; syncUI(); });
     }
 
-    if (ambience && started) { ambience.volume = muted ? 0 : 0.085; const pr = ambience.play(); if (pr && pr.catch) pr.catch(() => {}); }
+    if (ambience && started && !RENDER) { ambience.volume = muted ? 0 : 0.085; const pr = ambience.play(); if (pr && pr.catch) pr.catch(() => {}); }
 
     currentSceneStart = performance.now();
     lastFrame = currentSceneStart;
@@ -466,7 +616,7 @@
     if (!playing || idx < 0) return;
 
     const a = audios[idx];
-    if (a && !a.paused && !a.ended) {
+    if (a && !RENDER && !a.paused && !a.ended) {
       virtualT = a.currentTime;
     } else {
       virtualT += dt;
@@ -494,7 +644,7 @@
     updateCounterAndBar();
     updateTime();
 
-    if (!a && virtualT >= d) nextScene();
+    if ((RENDER || !a) && virtualT >= d) nextScene();
   }
   requestAnimationFrame(frame);
 
@@ -630,7 +780,7 @@
 
   window.addEventListener('pointermove', () => { if (playing) showDock(); }, { passive: true });
   window.addEventListener('touchstart', () => { if (playing) showDock(); }, { passive: true });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && playing) pauseAll(); });
+  if (!RENDER) document.addEventListener('visibilitychange', () => { if (document.hidden && playing) pauseAll(); });
 
   /* ---------------- boot ---------------- */
   async function boot() {
@@ -662,6 +812,21 @@
     syncUI();
     setTimeout(fit, 60);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+
+    if (RENDER) {
+      app.classList.add('is-render');
+      veil.dataset.mode = 'hidden';
+      dock.dataset.visible = 'false';
+      await waitMeta();
+      await new Promise((r) => { if (document.fonts && document.fonts.ready) document.fonts.ready.then(r); else r(); });
+      durations.forEach((d, i) => computeBeatTimes(i));
+      buildRenderModel();
+      applyRender(0);
+      window.__mg.seek = (t) => applyRender(Math.max(0, Math.min(totalDuration - 0.001, t)));
+      window.__mg.total = () => totalDuration;
+      window.__renderReady = true;
+      return;
+    }
 
     // deep-link / QA helper:  index.html?scene=3  |  ?scene=3&hold=1
     const qp = new URLSearchParams(location.search);

@@ -436,6 +436,33 @@ p,h1,h2{margin:0}
 .time{flex:0 0 auto;font-size:12px;color:rgba(233,240,250,.62);direction:ltr;
   font-variant-numeric:tabular-nums;letter-spacing:.3px;padding:0 2px;white-space:nowrap}
 
+/* deterministic render mode: JS drives every motion, CSS is still */
+.app.is-render .scene,
+.app.is-render .scene-body::before,
+.app.is-render .scene-body::after,
+.app.is-render .b,
+.app.is-render .chip,
+.app.is-render .rung,
+.app.is-render .person,
+.app.is-render .tick,
+.app.is-render .kicker,
+.app.is-render .title .wi,
+.app.is-render .caption,
+.app.is-render .seg i{transition:none !important}
+.app.is-render .blob,
+.app.is-render .beam,
+.app.is-render .caption-line::after,
+.app.is-render .particles i,
+.app.is-render .veil-mark{animation:none !important}
+.app.is-render .scene-body::before,
+.app.is-render .scene-body::after{opacity:1 !important;transform:none !important}
+.app.is-render .scene-body::after{display:none !important}
+
+.app.is-render .dock{display:none !important}
+.app.is-render .veil{display:none !important}
+.app.is-render .stage-tap{display:none !important}
+.app.is-render .particles i{animation-delay:0s !important}
+
 /* ================= veil ================= */
 .veil{
   position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:24px;
@@ -466,6 +493,16 @@ p,h1,h2{margin:0}
 .veil-btn:active{transform:scale(.97)}
 .veil-btn svg{width:18px;height:18px}
 .veil-hint{font-size:12px;color:rgba(233,240,250,.45);margin-top:6px}
+.veil-dl{
+  margin-top:14px;display:inline-flex;align-items:center;gap:8px;
+  padding:9px 16px;border-radius:99px;font-size:12px;font-weight:600;
+  color:rgba(240,246,255,.78);text-decoration:none;
+  border:1px solid rgba(233,184,114,.28);background:rgba(233,184,114,.06);
+  transition:background .25s ease,color .25s ease,border-color .25s ease;
+}
+.veil-dl:hover{background:rgba(233,184,114,.14);color:#fff;border-color:rgba(233,184,114,.5)}
+.veil-dl svg{width:15px;height:15px;color:var(--gold-2)}
+.app.is-render .veil-dl{display:none}
 .veil[data-mode="end"] .veil-title{font-size:26px}
 
 /* ================= responsive ================= */
